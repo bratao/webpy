@@ -194,6 +194,8 @@ class StaticApp(SimpleHTTPRequestHandler):
         self.headers = []
         self.environ = environ
         self.start_response = start_response
+        directory = os.getcwd()
+        self.directory = directory
 
     def send_response(self, status, msg=""):
         #the int(status) call is needed because in Py3 status is an enum.IntEnum and we need the integer behind
