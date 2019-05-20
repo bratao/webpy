@@ -1,14 +1,29 @@
+from __future__ import print_function
 
-
-import sys, os
-import urllib.request, urllib.parse, urllib.error
+import os
 import posixpath
+import sys
 
-from . import webapi as web
-from . import net
 from . import utils
+from . import webapi as web
 
-from http.server import SimpleHTTPRequestHandler
+try:
+    from io import BytesIO
+except ImportError:
+    from StringIO import BytesIO
+
+try:
+    from http.server import HTTPServer, SimpleHTTPRequestHandler, BaseHTTPRequestHandler
+except ImportError:
+    from SimpleHTTPServer import SimpleHTTPRequestHandler
+    from BaseHTTPServer import HTTPServer, BaseHTTPRequestHandler
+
+try:
+    from urllib import parse as urlparse
+    from urllib.parse import unquote
+except ImportError:
+    import urlparse
+    from urllib import unquote
 
 __all__ = ["runsimple"]
 
@@ -27,14 +42,14 @@ def runbasic(func, server_address=("0.0.0.0", 8080)):
     # Used under the modified BSD license:
     # http://www.xfree86.org/3.3.6/COPYRIGHT2.html#5
 
-    import http.server, socketserver, http.server, urllib.parse
+    import SocketServer
     import socket, errno
     import traceback
 
-    class WSGIHandler(http.server.SimpleHTTPRequestHandler):
+    class WSGIHandler(SimpleHTTPRequestHandler):
         def run_wsgi_app(self):
             protocol, host, path, parameters, query, fragment = \
-                urllib.parse.urlparse('http://dummyhost%s' % self.path)
+                urlparse.urlparse('http://dummyhost%s' % self.path)
 
             # we only use path, query
             env = {'wsgi.version': (1, 0)
@@ -56,7 +71,7 @@ def runbasic(func, server_address=("0.0.0.0", 8080)):
                    ,'SERVER_PROTOCOL': self.request_version
                    }
 
-            for http_header, http_value in list(self.headers.items()):
+            for http_header, http_value in self.headers.items():
                 env ['HTTP_%s' % http_header.replace('-', '_').upper()] = \
                     http_value
 
@@ -96,7 +111,7 @@ def runbasic(func, server_address=("0.0.0.0", 8080)):
 
         def do_GET(self):
             if self.path.startswith('/static/'):
-                http.server.SimpleHTTPRequestHandler.do_GET(self)
+                SimpleHTTPRequestHandler.do_GET(self)
             else:
                 self.run_wsgi_app()
 
@@ -123,9 +138,9 @@ def runbasic(func, server_address=("0.0.0.0", 8080)):
             # Send the data
             self.wfile.write(data)
 
-    class WSGIServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
+    class WSGIServer(SocketServer.ThreadingMixIn, HTTPServer):
         def __init__(self, func, server_address):
-            http.server.HTTPServer.__init__(self, 
+            HTTPServer.HTTPServer.__init__(self, 
                                                server_address, 
                                                WSGIHandler)
             self.app = func
@@ -151,10 +166,13 @@ def runsimple(func, server_address=("0.0.0.0", 8080)):
     
     server = WSGIServer(server_address, func)
 
-    if server.ssl_adapter:
-        print("https://%s:%d/" % server_address)
+    if '/' in server_address[0]:
+        print ("%s" % server_address)
     else:
-        print("http://%s:%d/" % server_address)
+        if server.ssl_adapter:
+            print("https://%s:%d/" % server_address)
+        else:
+            print("http://%s:%d/" % server_address)
 
     try:
         server.start()
@@ -167,41 +185,7 @@ def WSGIServer(server_address, wsgi_app):
     This function can be overwritten to customize the webserver or use a different webserver.
     """
     from cheroot import wsgi
-    
-    # Default values of wsgiserver.ssl_adapters uses cherrypy.wsgiserver
-    # prefix. Overwriting it make it work with web.wsgiserver.
-    wsgi.server.ssl_adapters = {
-        'builtin': 'web.wsgiserver.ssl_builtin.BuiltinSSLAdapter',
-        'pyopenssl': 'web.wsgiserver.ssl_pyopenssl.pyOpenSSLAdapter',
-    }
-    
     server = wsgi.Server(server_address, wsgi_app, server_name="localhost")
-        
-    def create_ssl_adapter(cert, key):
-        # wsgiserver tries to import submodules as cherrypy.wsgiserver.foo.
-        # That doesn't work as not it is web.wsgiserver. 
-        # Patching sys.modules temporarily to make it work.
-        import types
-        cherrypy = types.ModuleType('cherrypy')
-        cherrypy.wsgiserver = wsgi.server
-        sys.modules['cherrypy'] = cherrypy
-        sys.modules['cherrypy.wsgiserver'] = wsgi.server
-        
-        from .wsgiserver.ssl_pyopenssl import pyOpenSSLAdapter
-        adapter = pyOpenSSLAdapter(cert, key)
-        
-        # We are done with our work. Cleanup the patches.
-        del sys.modules['cherrypy']
-        del sys.modules['cherrypy.wsgiserver']
-
-        return adapter
-
-    # SSL backward compatibility
-    if (server.ssl_adapter is None and
-        getattr(server, 'ssl_certificate', None) and
-        getattr(server, 'ssl_private_key', None)):
-        server.ssl_adapter = create_ssl_adapter(server.ssl_certificate, server.ssl_private_key)
-
     server.nodelay = not sys.platform.startswith('java') # TCP_NODELAY isn't supported on the JVM
     return server
 
@@ -211,16 +195,11 @@ class StaticApp(SimpleHTTPRequestHandler):
         self.headers = []
         self.environ = environ
         self.start_response = start_response
-        # In Python 3.7, SimpleHTTPRequestHandler accepts the new directory argument,
-        # in addition to the new --directory command line argument.
         self.directory = os.getcwd()
 
     def send_response(self, status, msg=""):
-        # status' type is <enum 'HTTPStatus'> in python 3.6.*
-        if str(type(status)) == "<enum 'HTTPStatus'>":
-            self.status = str(int(status))+ " " + status.phrase
-        else:
-            self.status = str(status) + " " + msg
+        #the int(status) call is needed because in Py3 status is an enum.IntEnum and we need the integer behind
+        self.status = str(int(status)) + " " + msg
 
     def send_header(self, name, value):
         self.headers.append((name, value))
@@ -238,8 +217,7 @@ class StaticApp(SimpleHTTPRequestHandler):
                               environ.get('REMOTE_PORT','-')
         self.command = environ.get('REQUEST_METHOD', '-')
 
-        from io import StringIO
-        self.wfile = StringIO() # for capturing error
+        self.wfile = BytesIO() # for capturing error
 
         try:
             path = self.translate_path(self.path)
@@ -284,7 +262,7 @@ class StaticMiddleware:
             return self.app(environ, start_response)
 
     def normpath(self, path):
-        path2 = posixpath.normpath(urllib.parse.unquote(path))
+        path2 = posixpath.normpath(unquote(path))
         if path.endswith("/"):
             path2 += "/"
         return path2
@@ -296,9 +274,7 @@ class LogMiddleware:
         self.app = app
         self.format = '%s - - [%s] "%s %s %s" - %s'
     
-        from http.server import BaseHTTPRequestHandler
-        import io
-        f = io.StringIO()
+        f = BytesIO()
         
         class FakeSocket:
             def makefile(self, *a):

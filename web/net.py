@@ -3,17 +3,26 @@ Network Utilities
 (from web.py)
 """
 
-__all__ = [
-  "validipaddr", "validip6addr", "validipport", "validip", "validaddr",
-  "urlquote",
-  "httpdate", "parsehttpdate", 
-  "htmlquote", "htmlunquote", "websafe",
-]
 
-import urllib.request, time
 import datetime
 import re
 import socket
+import time
+
+from .py3helpers import PY2, text_type
+
+try:
+    from urllib.parse import quote
+except ImportError:
+    from urllib import quote
+
+__all__ = [
+  "validipaddr", "validip6addr", "validipport", "validip", "validaddr",
+  "urlquote",
+  "httpdate", "parsehttpdate",
+  "htmlquote", "htmlunquote", "websafe",
+]
+
 
 def validip6addr(address):
     """
@@ -30,17 +39,15 @@ def validip6addr(address):
     """
     try:
         socket.inet_pton(socket.AF_INET6, address)
-    except socket.error:
+    except (socket.error, AttributeError):
         return False
-    except:
-        pass
 
     return True
 
 def validipaddr(address):
     """
     Returns True if `address` is a valid IPv4 address.
-    
+
         >>> validipaddr('192.168.1.1')
         True
         >>> validipaddr('192.168.1.800')
@@ -62,7 +69,7 @@ def validipaddr(address):
 def validipport(port):
     """
     Returns True if `port` is a valid IPv4 port.
-    
+
         >>> validipport('9000')
         True
         >>> validipport('foo')
@@ -80,23 +87,24 @@ def validipport(port):
 def validip(ip, defaultaddr="0.0.0.0", defaultport=8080):
     """
     Returns `(ip_address, port)` from string `ip_addr_port`
-    >>> validip('1.2.3.4')
-    ('1.2.3.4', 8080)
-    >>> validip('80')
-    ('0.0.0.0', 80)
-    >>> validip('192.168.0.1:85')
-    ('192.168.0.1', 85)
-    >>> validip('::')
-    ('::', 8080)
-    >>> validip('[::]:88')
-    ('::', 88)
-    >>> validip('[::1]:80')
-    ('::1', 80)
+
+        >>> validip('1.2.3.4')
+        ('1.2.3.4', 8080)
+        >>> validip('80')
+        ('0.0.0.0', 80)
+        >>> validip('192.168.0.1:85')
+        ('192.168.0.1', 85)
+        >>> validip('::')
+        ('::', 8080)
+        >>> validip('[::]:88')
+        ('::', 88)
+        >>> validip('[::1]:80')
+        ('::1', 80)
 
     """
     addr = defaultaddr
     port = defaultport
-    
+
     #Matt Boswell's code to check for ipv6 first
     match = re.search(r'^\[([^]]+)\](?::(\d+))?$',ip) #check for [ipv6]:port
     if match:
@@ -121,7 +129,7 @@ def validip(ip, defaultaddr="0.0.0.0", defaultport=8080):
             raise ValueError(':'.join(ip) + ' is not a valid IP address/port')
     elif len(ip) == 2:
         addr, port = ip
-        if not validipaddr(addr) and validipport(port):
+        if not validipaddr(addr) or not validipport(port):
             raise ValueError(':'.join(ip) + ' is not a valid IP address/port')
         port = int(port)
     else:
@@ -131,7 +139,7 @@ def validip(ip, defaultaddr="0.0.0.0", defaultport=8080):
 def validaddr(string_):
     """
     Returns either (ip_address, port) or "/path/to/socket" from string_
-    
+
         >>> validaddr('/path/to/socket')
         '/path/to/socket'
         >>> validaddr('8000')
@@ -155,7 +163,7 @@ def validaddr(string_):
 def urlquote(val):
     """
     Quotes a string for use in a URL.
-    
+
         >>> urlquote('://?f=1&j=1')
         '%3A//%3Ff%3D1%26j%3D1'
         >>> urlquote(None)
@@ -164,14 +172,20 @@ def urlquote(val):
         '%E2%80%BD'
     """
     if val is None: return ''
-    if not isinstance(val, str): val = str(val)
-    else: val = val.encode('utf-8')
-    return urllib.request.quote(val)
+
+    if PY2:
+        if isinstance(val, text_type):
+            val = val.encode('utf-8')
+        else:
+            val = str(val)
+    else:
+        val = str(val).encode('utf-8')
+    return quote(val)
 
 def httpdate(date_obj):
     """
     Formats a datetime object for use in HTTP headers.
-    
+
         >>> import datetime
         >>> httpdate(datetime.datetime(1970, 1, 1, 1, 1, 1))
         'Thu, 01 Jan 1970 01:01:01 GMT'
@@ -194,9 +208,9 @@ def parsehttpdate(string_):
 def htmlquote(text):
     r"""
     Encodes `text` for raw use in HTML.
-    
+
         >>> htmlquote(u"<'&\">")
-        '&lt;&#39;&amp;&quot;&gt;'
+        u'&lt;&#39;&amp;&quot;&gt;'
     """
     text = text.replace(u"&", u"&amp;") # Must be done first!
     text = text.replace(u"<", u"&lt;")
@@ -210,7 +224,7 @@ def htmlunquote(text):
     Decodes `text` that's HTML quoted.
 
         >>> htmlunquote(u'&lt;&#39;&amp;&quot;&gt;')
-        '<\'&">'
+        u'<\'&">'
     """
     text = text.replace(u"&quot;", u'"')
     text = text.replace(u"&#39;", u"'")
@@ -218,26 +232,31 @@ def htmlunquote(text):
     text = text.replace(u"&lt;", u"<")
     text = text.replace(u"&amp;", u"&") # Must be done last!
     return text
-    
+
 def websafe(val):
     r"""Converts `val` so that it is safe for use in Unicode HTML.
 
         >>> websafe("<'&\">")
-        '&lt;&#39;&amp;&quot;&gt;'
+        u'&lt;&#39;&amp;&quot;&gt;'
         >>> websafe(None)
-        ''
-        >>> websafe(u'\u203d')
-        '\u203d'
-        >>> websafe(b'\xe2\x80\xbd')
-        '\u203d'
+        u''
+        >>> websafe(u'\u203d') == u'\u203d'
+        True
     """
     if val is None:
-        return ''
-    elif isinstance(val, bytes):
-        val = val.decode('utf-8')
-    elif not isinstance(val, str):
-        val = str(val)
-        
+        return u''
+
+    if PY2:
+        if isinstance(val, str):
+            val = val.decode('utf-8')
+        elif not isinstance(val, text_type):
+            val = text_type(val)
+    else:
+        if isinstance(val, bytes):
+            val = val.decode('utf-8')
+        elif not isinstance(val, str):
+            val = str(val)
+
     return htmlquote(val)
 
 if __name__ == "__main__":

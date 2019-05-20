@@ -1,28 +1,37 @@
 #!/usr/bin/python
-import re, sys, string
-import hashlib
+from __future__ import print_function
+
+import md5
+import re
+import sys
 
 """markdown.py: A Markdown-styled-text to HTML converter in Python.
 
 Usage:
   ./markdown.py textfile.markdown
- 
+
 Calling:
   import markdown
   somehtml = markdown.markdown(sometext)
 
-For other versions of markdown, see: 
+For other versions of markdown, see:
   http://www.freewisdom.org/projects/python-markdown/
   http://en.wikipedia.org/wiki/Markdown
 """
 
-__version__ = '1.0.1-2' # port of 1.0.1
+__version__ = '1.0.1-2'  # port of 1.0.1
 __license__ = "GNU GPL 2"
 __author__ = [
   'John Gruber <http://daringfireball.net/>',
-  'Tollef Fog Heen <tfheen@err.no>', 
+  'Tollef Fog Heen <tfheen@err.no>',
   'Aaron Swartz <me@aaronsw.com>'
 ]
+
+try:
+    xrange          # Python 2
+except NameError:
+    xrange = range  # Python 3
+
 
 def htmlquote(text):
     """Encodes `text` for raw use in HTML."""
@@ -35,7 +44,7 @@ def htmlquote(text):
 
 def semirandom(seed):
     x = 0
-    for c in hashlib.md5(seed.encode()).hexdigest(): x += ord(c)
+    for c in md5.new(seed).digest(): x += ord(c)
     return x / (255*16.)
 
 class _Markdown:
@@ -45,8 +54,8 @@ class _Markdown:
     escapechars = '\\`*_{}[]()>#+-.!'
     escapetable = {}
     for char in escapechars:
-        escapetable[char] = hashlib.md5(char.encode()).hexdigest()
-    
+        escapetable[char] = md5.new(char).hexdigest()
+
     r_multiline = re.compile("\n{2,}")
     r_stripspace = re.compile(r"^[ \t]+$", re.MULTILINE)
     def parse(self, text):
@@ -54,7 +63,7 @@ class _Markdown:
         self.titles = {}
         self.html_blocks = {}
         self.list_level = 0
-        
+
         text = text.replace("\r\n", "\n")
         text = text.replace("\r", "\n")
         text += "\n\n"
@@ -65,7 +74,7 @@ class _Markdown:
         text = self._RunBlockGamut(text)
         text = self._UnescapeSpecialChars(text)
         return text
-    
+
     r_StripLinkDefinitions = re.compile(r"""
     ^[ ]{0,%d}\[(.+)\]:  # id = $1
       [ \t]*\n?[ \t]*
@@ -94,7 +103,7 @@ class _Markdown:
 
     blocktagsb = r"p|div|h[1-6]|blockquote|pre|table|dl|ol|ul|script|math"
     blocktagsa = blocktagsb + "|ins|del"
-    
+
     r_HashHTMLBlocks1 = re.compile(r"""
     (            # save in $1
     ^            # start of line  (with /m)
@@ -129,7 +138,7 @@ class _Markdown:
     [ ]{0,%d}
     <(hr)        # start tag = $2
     \b           # word break
-    ([^<>])*?    # 
+    ([^<>])*?    #
     /?>          # the matching end tag
     [ \t]*
     (?=\n{2,}|\Z)# followed by a blank line or end of document
@@ -143,7 +152,7 @@ class _Markdown:
     )
     (            # save in $1
     [ ]{0,%d}
-    (?: 
+    (?:
       <!
       (--.*?--\s*)+
       >
@@ -155,7 +164,7 @@ class _Markdown:
 
     def _HashHTMLBlocks(self, text):
         def handler(m):
-            key = hashlib.md5(m.group(1).encode()).hexdigest()
+            key = md5.new(m.group(1)).hexdigest()
             self.html_blocks[key] = m.group(1)
             return "\n\n%s\n\n" % key
 
@@ -170,7 +179,7 @@ class _Markdown:
     r_hr1 = re.compile(r'^[ ]{0,2}([ ]?\*[ ]?){3,}[ \t]*$', re.M)
     r_hr2 = re.compile(r'^[ ]{0,2}([ ]?-[ ]?){3,}[ \t]*$', re.M)
     r_hr3 = re.compile(r'^[ ]{0,2}([ ]?_[ ]?){3,}[ \t]*$', re.M)
-	
+
     def _RunBlockGamut(self, text):
         text = self._DoHeaders(text)
         for x in [self.r_hr1, self.r_hr2, self.r_hr3]:
@@ -214,7 +223,7 @@ class _Markdown:
     r_DoAnchors1 = re.compile(
           r""" (                 # wrap whole match in $1
                   \[
-                    (.*?)        # link text = $2 
+                    (.*?)        # link text = $2
                     # [for bracket nesting, see below]
                   \]
 
@@ -243,7 +252,7 @@ class _Markdown:
                   \)
                 )
     """, re.S|re.VERBOSE)
-    def _DoAnchors(self, text): 
+    def _DoAnchors(self, text):
         # We here don't do the same as the perl version, as python's regex
         # engine gives us no way to match brackets.
 
@@ -253,9 +262,9 @@ class _Markdown:
             link_id = m.group(3).lower()
             if not link_id: link_id = link_text.lower()
             title = self.titles.get(link_id, None)
-                
 
-            if link_id in self.urls:
+
+            if self.urls.has_key(link_id):
                 url = self.urls[link_id]
                 url = url.replace("*", self.escapetable["*"])
                 url = url.replace("_", self.escapetable["_"])
@@ -279,7 +288,7 @@ class _Markdown:
             url = url.replace("*", self.escapetable["*"])
             url = url.replace("_", self.escapetable["_"])
             res = '''<a href="%s"''' % htmlquote(url)
-            
+
             if title:
                 title = title.replace('"', '&quot;')
                 title = title.replace("*", self.escapetable["*"])
@@ -337,12 +346,12 @@ class _Markdown:
                 link_id = alt_text.lower()
 
             alt_text = alt_text.replace('"', "&quot;")
-            if link_id in self.urls:
+            if self.urls.has_key(link_id):
                 url = self.urls[link_id]
                 url = url.replace("*", self.escapetable["*"])
                 url = url.replace("_", self.escapetable["_"])
                 res = '''<img src="%s" alt="%s"''' % (htmlquote(url), htmlquote(alt_text))
-                if link_id in self.titles:
+                if self.titles.has_key(link_id):
                     title = self.titles[link_id]
                     title = title.replace("*", self.escapetable["*"])
                     title = title.replace("_", self.escapetable["_"])
@@ -357,7 +366,7 @@ class _Markdown:
             alt_text = m.group(2)
             url = m.group(3)
             title = m.group(6) or ''
-            
+
             alt_text = alt_text.replace('"', "&quot;")
             title = title.replace('"', "&quot;")
             url = url.replace("*", self.escapetable["*"])
@@ -373,12 +382,12 @@ class _Markdown:
         text = self.r_DoImages1.sub(handler1, text)
         text = self.r_DoImages2.sub(handler2, text)
         return text
-    
+
     r_DoHeaders = re.compile(r"^(\#{1,6})[ \t]*(.+?)[ \t]*\#*\n+", re.VERBOSE|re.M)
     def _DoHeaders(self, text):
         def findheader(text, c, n):
             textl = text.split('\n')
-            for i in range(len(textl)):
+            for i in xrange(len(textl)):
                 if i >= len(textl): continue
                 count = textl[i].strip().count(c)
                 if count > 0 and count == len(textl[i].strip()) and textl[i+1].strip() == '' and textl[i-1].strip() != '':
@@ -387,7 +396,7 @@ class _Markdown:
                     textl = textl[:i] + textl[i+1:]
             text = '\n'.join(textl)
             return text
-        
+
         def handler(m):
             level = len(m.group(1))
             header = self._RunSpanGamut(m.group(2))
@@ -397,7 +406,7 @@ class _Markdown:
         text = findheader(text, '-', '2')
         text = self.r_DoHeaders.sub(handler, text)
         return text
-    
+
     rt_l = r"""
     (
       (
@@ -418,7 +427,7 @@ class _Markdown:
     r_DoLists = re.compile('^'+rt_l, re.M | re.VERBOSE | re.S)
     r_DoListsTop = re.compile(
       r'(?:\A\n?|(?<=\n\n))'+rt_l, re.M | re.VERBOSE | re.S)
-    
+
     def _DoLists(self, text):
         def handler(m):
             list_type = "ol"
@@ -429,7 +438,7 @@ class _Markdown:
             res = self._ProcessListItems(listn)
             res = "<%s>\n%s</%s>\n" % (list_type, res, list_type)
             return res
-            
+
         if self.list_level:
             text = self.r_DoLists.sub(handler, text)
         else:
@@ -449,7 +458,7 @@ class _Markdown:
     def _ProcessListItems(self, text):
         self.list_level += 1
         text = self.r_multiend.sub("\n", text)
-        
+
         def handler(m):
             item = m.group(4)
             leading_line = m.group(1)
@@ -466,7 +475,7 @@ class _Markdown:
         text = self.r_ProcessListItems.sub(handler, text)
         self.list_level -= 1
         return text
-    
+
     r_DoCodeBlocks = re.compile(r"""
     (?:\n\n|\A)
     (                 # $1 = the code block
@@ -505,7 +514,7 @@ class _Markdown:
 
         text = self.r_DoCodeSpans.sub(handler, text)
         return text
-    
+
     def _EncodeCode(self, text):
         text = text.replace("&","&amp;")
         text = text.replace("<","&lt;")
@@ -514,14 +523,14 @@ class _Markdown:
             text = text.replace(c, self.escapetable[c])
         return text
 
-    
+
     r_DoBold = re.compile(r"(\*\*|__) (?=\S) (.+?[*_]*) (?<=\S) \1", re.VERBOSE | re.S)
     r_DoItalics = re.compile(r"(\*|_) (?=\S) (.+?) (?<=\S) \1", re.VERBOSE | re.S)
     def _DoItalicsAndBold(self, text):
         text = self.r_DoBold.sub(r"<strong>\2</strong>", text)
         text = self.r_DoItalics.sub(r"<em>\2</em>", text)
         return text
-    
+
     r_start = re.compile(r"^", re.M)
     r_DoBlockQuotes1 = re.compile(r"^[ \t]*>[ \t]?", re.M)
     r_DoBlockQuotes2 = re.compile(r"^[ \t]+$", re.M)
@@ -540,7 +549,7 @@ class _Markdown:
     def _DoBlockQuotes(self, text):
         def prehandler(m):
             return self.r_propre.sub('', m.group(1))
-                
+
         def handler(m):
             bq = m.group(1)
             bq = self.r_DoBlockQuotes1.sub("", bq)
@@ -549,7 +558,7 @@ class _Markdown:
             bq = self.r_start.sub("  ", bq)
             bq = self.r_protectpre.sub(prehandler, bq)
             return "<blockquote>\n%s\n</blockquote>\n\n" % bq
-            
+
         text = self.r_DoBlockQuotes3.sub(handler, text)
         return text
 
@@ -558,19 +567,19 @@ class _Markdown:
         text = text.strip("\n")
         grafs = self.r_multiline.split(text)
 
-        for g in range(len(grafs)):
+        for g in xrange(len(grafs)):
             t = grafs[g].strip() #@@?
-            if t not in self.html_blocks:
+            if not self.html_blocks.has_key(t):
                 t = self._RunSpanGamut(t)
                 t = self.r_tabbed.sub(r"<p>", t)
                 t += "</p>"
                 grafs[g] = t
 
-        for g in range(len(grafs)):
+        for g in xrange(len(grafs)):
             t = grafs[g].strip()
-            if t in self.html_blocks:
+            if self.html_blocks.has_key(t):
                 grafs[g] = self.html_blocks[t]
-        
+
         return "\n\n".join(grafs)
 
     r_EncodeAmps = re.compile(r"&(?!#?[xX]?(?:[0-9a-fA-F]+|\w+);)")
@@ -584,7 +593,7 @@ class _Markdown:
         for char in self.escapechars:
             text = text.replace("\\" + char, self.escapetable[char])
         return text
-    
+
     r_link = re.compile(r"<((https?|ftp):[^\'\">\s]+)>", re.I)
     r_email = re.compile(r"""
       <
@@ -601,10 +610,10 @@ class _Markdown:
         def handler(m):
             l = m.group(1)
             return self._EncodeEmailAddress(self._UnescapeSpecialChars(l))
-    
+
         text = self.r_email.sub(handler, text)
         return text
-    
+
     r_EncodeEmailAddress = re.compile(r">.+?:")
     def _EncodeEmailAddress(self, text):
         encode = [
@@ -617,7 +626,7 @@ class _Markdown:
         addr = ""
         for c in text:
             if c == ':': addr += c; continue
-            
+
             r = semirandom(addr)
             if r < 0.45:
                 addr += encode[1](c)
@@ -634,7 +643,7 @@ class _Markdown:
         for key in self.escapetable.keys():
             text = text.replace(self.escapetable[key], key)
         return text
-    
+
     tokenize_depth = 6
     tokenize_nested_tags = '|'.join([r'(?:<[a-z/!$](?:[^<>]'] * tokenize_depth) + (')*>)' * tokenize_depth)
     r_TokenizeHTML = re.compile(
@@ -664,7 +673,7 @@ class _Markdown:
     r_Outdent = re.compile(r"""^(\t|[ ]{1,%d})""" % tabwidth, re.M)
     def _Outdent(self, text):
         text = self.r_Outdent.sub("", text)
-        return text    
+        return text
 
     def _Detab(self, text): return text.expandtabs(self.tabwidth)
 
@@ -673,6 +682,6 @@ markdown = Markdown
 
 if __name__ == '__main__':
     if len(sys.argv) > 1:
-        print (Markdown(open(sys.argv[1]).read()))
+        print(Markdown(open(sys.argv[1]).read()))
     else:
-        print (Markdown(sys.stdin.read()))
+        print(Markdown(sys.stdin.read()))
