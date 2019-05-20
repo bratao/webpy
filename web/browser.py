@@ -3,39 +3,10 @@
 """
 from .utils import re_compile
 from .net import htmlunquote
-from io import BytesIO, StringIO
 
+import http.client, urllib.request, urllib.parse, urllib.error
 import copy
-
-from .py3helpers import PY2
-
-#Welcome to the Py2->Py3 httplib/urllib reorganization nightmare.
-
-if PY2:
-    get_selector = lambda x: x.get_selector()
-    get_host = lambda x: x.get_host()
-    get_data = lambda x: x.get_data()
-    get_type = lambda x: x.get_type()
-else:
-    get_selector = lambda x: x.selector
-    get_host = lambda x: x.host
-    get_data = lambda x: x.data
-    get_type = lambda x: x.type
-
-try: #Py3
-    from http.client import HTTPMessage
-    from urllib.request import HTTPHandler, HTTPCookieProcessor, build_opener, Request, HTTPError
-    from urllib.request import build_opener as urllib_build_opener
-    from urllib.parse import urljoin
-    from http.cookiejar import CookieJar
-    from urllib.response import addinfourl
-except ImportError:  #Py2
-    from httplib import HTTPMessage
-    from urllib import addinfourl
-    from urllib2 import HTTPHandler, HTTPCookieProcessor, Request, HTTPError
-    from urllib2 import build_opener as urllib_build_opener
-    from cookielib import CookieJar
-    from urlparse import urljoin
+from io import BytesIO
 
 DEBUG = False
 
@@ -48,10 +19,11 @@ __all__ = [
 class BrowserError(Exception):
     pass
 
-class Browser(object):
+class Browser:
     def __init__(self):
-        self.cookiejar = CookieJar()
-        self._cookie_processor = HTTPCookieProcessor(self.cookiejar)
+        import http.cookiejar
+        self.cookiejar = http.cookiejar.CookieJar()
+        self._cookie_processor = urllib.request.HTTPCookieProcessor(self.cookiejar)
         self.form = None
 
         self.url = "http://0.0.0.0:8080/"
@@ -62,45 +34,38 @@ class Browser(object):
         self._response = None
         self._forms = None
 
-    @property
-    def text(self):
-        return self.data.decode('utf-8')
-
     def reset(self):
         """Clears all cookies and history."""
         self.cookiejar.clear()
 
     def build_opener(self):
-        """Builds the opener using (urllib2/urllib.request).build_opener. 
+        """Builds the opener using urllib2.build_opener. 
         Subclasses can override this function to prodive custom openers.
         """
-        return urllib_build_opener()
+        return urllib.request.build_opener()
 
     def do_request(self, req):
         if DEBUG:
-            print('requesting', req.get_method(), req.get_full_url())
-
+            print(('requesting', req.get_method(), req.get_full_url()))
         opener = self.build_opener()
         opener.add_handler(self._cookie_processor)
         try:
             self._response = opener.open(req)
-        except HTTPError as e:
+        except urllib.error.HTTPError as e:
             self._response = e
 
         self.url = self._response.geturl()
-        self.path = get_selector(Request(self.url))
+        self.path = urllib.request.Request(self.url).selector
         self.data = self._response.read()
         self.status = self._response.code
         self._forms = None
         self.form = None
-
         return self.get_response()
 
     def open(self, url, data=None, headers={}):
         """Opens the specified url."""
-        url = urljoin(self.url, url)
-        req = Request(url, data, headers)
-
+        url = urllib.parse.urljoin(self.url, url)
+        req = urllib.request.Request(url, data, headers)
         return self.do_request(req)
 
     def show(self):
@@ -115,7 +80,7 @@ class Browser(object):
 
     def get_response(self):
         """Returns a copy of the current response."""
-        return addinfourl(BytesIO(self.data), self._response.info(), self._response.geturl())
+        return urllib.request.addinfourl(BytesIO(self.data), self._response.info(), self._response.geturl())
 
     def get_soup(self):
         """Returns beautiful soup of the current document."""
@@ -125,7 +90,7 @@ class Browser(object):
     def get_text(self, e=None):
         """Returns content of e or the current document as plain text."""
         e = e or self.get_soup()
-        return ''.join([htmlunquote(c) for c in e.recursiveChildGenerator() if isinstance(c, unicode)])
+        return ''.join([htmlunquote(c) for c in e.recursiveChildGenerator() if isinstance(c, str)])
 
     def _get_links(self):
         soup = self.get_soup()
@@ -233,9 +198,9 @@ class AppBrowser(Browser):
         self.app = app
 
     def build_opener(self):
-        return urllib_build_opener(AppHandler(self.app))
+        return urllib.request.build_opener(AppHandler(self.app))
 
-class AppHandler(HTTPHandler):
+class AppHandler(urllib.request.HTTPHandler):
     """urllib2 handler to handle requests using web.py application."""
     handler_order = 100
 
@@ -244,12 +209,12 @@ class AppHandler(HTTPHandler):
 
     def http_open(self, req):
         result = self.app.request(
-            localpart=get_selector(req),
+            localpart=req.selector,
             method=req.get_method(),
-            host=get_host(req),
-            data=get_data(req),
+            host=req.host,
+            data=req.data,
             headers=dict(req.header_items()),
-            https=get_type(req) == "https"
+            https=req.type == "https"
         )
         return self._make_response(result, req.get_full_url())
 
@@ -257,22 +222,17 @@ class AppHandler(HTTPHandler):
         return self.http_open(req)
     
     try:
-        https_request = HTTPHandler.do_request_
+        https_request = urllib.request.HTTPHandler.do_request_
     except AttributeError:
         # for python 2.3
         pass
 
     def _make_response(self, result, url):
-
         data = "\r\n".join(["%s: %s" % (k, v) for k, v in result.header_items])
-
-        if PY2:
-            headers = HTTPMessage(BytesIO(data))
-        else:
-            import email
-            headers = email.message_from_string(data)
-
-        response = addinfourl(BytesIO(result.data), headers, url)
+        #headers = http.client.HTTPMessage(StringIO(data))
+        import email
+        headers = email.message_from_string(data)
+        response = urllib.request.addinfourl(BytesIO(result.data), headers, url)
         code, msg = result.status.split(None, 1)
         response.code, response.msg = int(code), msg
         return response

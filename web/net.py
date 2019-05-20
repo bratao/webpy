@@ -10,17 +10,10 @@ __all__ = [
   "htmlquote", "htmlunquote", "websafe",
 ]
 
-import urllib, time
+import urllib.request, time
 import datetime
 import re
 import socket
-
-try:
-    from urllib.parse import quote
-except ImportError:
-    from urllib import quote
-
-from .py3helpers import PY2
 
 def validip6addr(address):
     """
@@ -37,8 +30,10 @@ def validip6addr(address):
     """
     try:
         socket.inet_pton(socket.AF_INET6, address)
-    except (socket.error, AttributeError):
+    except socket.error:
         return False
+    except:
+        pass
 
     return True
 
@@ -85,24 +80,23 @@ def validipport(port):
 def validip(ip, defaultaddr="0.0.0.0", defaultport=8080):
     """
     Returns `(ip_address, port)` from string `ip_addr_port`
-
-        >>> validip('1.2.3.4')
-        ('1.2.3.4', 8080)
-        >>> validip('80')
-        ('0.0.0.0', 80)
-        >>> validip('192.168.0.1:85')
-        ('192.168.0.1', 85)
-        >>> validip('::')
-        ('::', 8080)
-        >>> validip('[::]:88')
-        ('::', 88)
-        >>> validip('[::1]:80')
-        ('::1', 80)
+    >>> validip('1.2.3.4')
+    ('1.2.3.4', 8080)
+    >>> validip('80')
+    ('0.0.0.0', 80)
+    >>> validip('192.168.0.1:85')
+    ('192.168.0.1', 85)
+    >>> validip('::')
+    ('::', 8080)
+    >>> validip('[::]:88')
+    ('::', 88)
+    >>> validip('[::1]:80')
+    ('::1', 80)
 
     """
     addr = defaultaddr
     port = defaultport
-
+    
     #Matt Boswell's code to check for ipv6 first
     match = re.search(r'^\[([^]]+)\](?::(\d+))?$',ip) #check for [ipv6]:port
     if match:
@@ -127,7 +121,7 @@ def validip(ip, defaultaddr="0.0.0.0", defaultport=8080):
             raise ValueError(':'.join(ip) + ' is not a valid IP address/port')
     elif len(ip) == 2:
         addr, port = ip
-        if not validipaddr(addr) or not validipport(port):
+        if not validipaddr(addr) and validipport(port):
             raise ValueError(':'.join(ip) + ' is not a valid IP address/port')
         port = int(port)
     else:
@@ -170,15 +164,9 @@ def urlquote(val):
         '%E2%80%BD'
     """
     if val is None: return ''
-
-    if PY2:
-        if isinstance(val, unicode):
-            val = val.encode('utf-8')
-        else:
-            val = str(val)
-    else:
-        val = str(val).encode('utf-8')
-    return quote(val)
+    if not isinstance(val, str): val = str(val)
+    else: val = val.encode('utf-8')
+    return urllib.request.quote(val)
 
 def httpdate(date_obj):
     """
@@ -208,7 +196,7 @@ def htmlquote(text):
     Encodes `text` for raw use in HTML.
     
         >>> htmlquote(u"<'&\">")
-        u'&lt;&#39;&amp;&quot;&gt;'
+        '&lt;&#39;&amp;&quot;&gt;'
     """
     text = text.replace(u"&", u"&amp;") # Must be done first!
     text = text.replace(u"<", u"&lt;")
@@ -222,7 +210,7 @@ def htmlunquote(text):
     Decodes `text` that's HTML quoted.
 
         >>> htmlunquote(u'&lt;&#39;&amp;&quot;&gt;')
-        u'<\'&">'
+        '<\'&">'
     """
     text = text.replace(u"&quot;", u'"')
     text = text.replace(u"&#39;", u"'")
@@ -235,26 +223,21 @@ def websafe(val):
     r"""Converts `val` so that it is safe for use in Unicode HTML.
 
         >>> websafe("<'&\">")
-        u'&lt;&#39;&amp;&quot;&gt;'
+        '&lt;&#39;&amp;&quot;&gt;'
         >>> websafe(None)
-        u''
-        >>> websafe(u'\u203d') == u'\u203d'
-        True
+        ''
+        >>> websafe(u'\u203d')
+        '\u203d'
+        >>> websafe(b'\xe2\x80\xbd')
+        '\u203d'
     """
     if val is None:
-        return u''
-
-    if PY2:
-        if isinstance(val, str):
-            val = val.decode('utf-8')
-        elif not isinstance(val, unicode):
-            val = unicode(val)
-    else:
-        if isinstance(val, bytes):
-            val = val.decode('utf-8')
-        elif not isinstance(val, str):
-            val = str(val)
-    
+        return ''
+    elif isinstance(val, bytes):
+        val = val.decode('utf-8')
+    elif not isinstance(val, str):
+        val = str(val)
+        
     return htmlquote(val)
 
 if __name__ == "__main__":

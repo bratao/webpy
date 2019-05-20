@@ -3,22 +3,11 @@ Database API
 (part of web.py)
 """
 from __future__ import print_function
-from .utils import threadeddict, storage, iters, iterbetter, safestr, safeunicode
-import datetime, time, os, urllib, re
 
-from .py3helpers import PY2, string_types, numeric_types, iteritems
+import time, os, urllib.parse, urllib.request
+import datetime
 
-try:
-    from urllib import parse as urlparse
-    from urllib.parse import unquote
-except ImportError:
-    import urlparse
-    from urllib import unquote
-
-try:
-    import ast
-except ImportError:
-    ast = None
+from .utils import threadeddict, storage, iters, iterbetter, safestr, safebytes
 
 try:
     # db module can work independent of web.py
@@ -35,10 +24,6 @@ __all__ = [
   "SQLLiteral", "sqlliteral",
   "database", 'DB',
 ]
-
-TOKEN = '[ \\f\\t]*(\\\\\\r?\\n[ \\f\\t]*)*(#[^\\r\\n]*)?(((\\d+[jJ]|((\\d+\\.\\d*|\\.\\d+)([eE][-+]?\\d+)?|\\d+[eE][-+]?\\d+)[jJ])|((\\d+\\.\\d*|\\.\\d+)([eE][-+]?\\d+)?|\\d+[eE][-+]?\\d+)|(0[xX][\\da-fA-F]+[lL]?|0[bB][01]+[lL]?|(0[oO][0-7]+)|(0[0-7]*)[lL]?|[1-9]\\d*[lL]?))|((\\*\\*=?|>>=?|<<=?|<>|!=|//=?|[+\\-*/%&|^=<>]=?|~)|[][(){}]|(\\r?\\n|[:;.,`@]))|([uUbB]?[rR]?\'[^\\n\'\\\\]*(?:\\\\.[^\\n\'\\\\]*)*\'|[uUbB]?[rR]?"[^\\n"\\\\]*(?:\\\\.[^\\n"\\\\]*)*")|[a-zA-Z_]\\w*)'
-
-tokenprog = re.compile(TOKEN)
 
 class UnknownDB(Exception):
     """raised for unsupported dbms"""
@@ -100,9 +85,6 @@ class SQLParam(object):
             
     def __str__(self): 
         return str(self.value)
-
-    def __eq__(self, other):
-        return isinstance(other, SQLParam) and other.value == self.value
     
     def __repr__(self):
         return '<param: %s>' % repr(self.value)
@@ -154,7 +136,7 @@ class SQLQuery(object):
         self.items.append(value)
 
     def __add__(self, other):
-        if isinstance(other, string_types):
+        if isinstance(other, str):
             items = [other]
         elif isinstance(other, SQLQuery):
             items = other.items
@@ -163,16 +145,15 @@ class SQLQuery(object):
         return SQLQuery(self.items + items)
 
     def __radd__(self, other):
-        if isinstance(other, string_types):
+        if isinstance(other, str):
             items = [other]
-        elif isinstance(other, SQLQuery):
-            items = other.items
         else:
             return NotImplemented
+            
         return SQLQuery(items + self.items)
 
     def __iadd__(self, other):
-        if isinstance(other, (string_types, SQLParam)):
+        if isinstance(other, (str, SQLParam)):
             self.items.append(other)
         elif isinstance(other, SQLQuery):
             self.items.extend(other.items)
@@ -182,9 +163,6 @@ class SQLQuery(object):
 
     def __len__(self):
         return len(self.query())
-
-    def __eq__(self, other):
-        return isinstance(other, SQLQuery) and other.items == self.items
         
     def query(self, paramstyle=None):
         """
@@ -242,12 +220,10 @@ class SQLQuery(object):
             target_items.append(prefix)
 
         for i, item in enumerate(items):
-            if i != 0 and sep != "":
+            if i != 0:
                 target_items.append(sep)
             if isinstance(item, SQLQuery):
                 target_items.extend(item.items)
-            elif item == "": # joins with empty strings
-                continue
             else:
                 target_items.append(item)
 
@@ -265,9 +241,6 @@ class SQLQuery(object):
         
     def __str__(self):
         return safestr(self._str())
-        
-    def __unicode__(self):
-        return safeunicode(self._str())
 
     def __repr__(self):
         return '<sql: %s>' % repr(str(self))
@@ -285,7 +258,7 @@ class SQLLiteral:
         self.v = v
 
     def __repr__(self): 
-        return "<literal: %r>" % self.v
+        return self.v
 
 sqlliteral = SQLLiteral
 
@@ -313,11 +286,8 @@ def reparam(string_, dictionary):
         >>> reparam("s IN $s", dict(s=[1, 2]))
         <sql: 's IN (1, 2)'>
     """
-    return SafeEval().safeeval(string_, dictionary)
-
     dictionary = dictionary.copy() # eval mucks with it
-    # disable builtins to avoid risk for remote code exection.
-    dictionary['__builtins__'] = object()
+    vals = []
     result = []
     for live, chunk in _interpolate(string_):
         if live:
@@ -347,14 +317,13 @@ def sqlify(obj):
         return "'t'"
     elif obj is False:
         return "'f'"
-    elif isinstance(obj, numeric_types):
+    elif isinstance(obj, int):
         return str(obj)
     elif isinstance(obj, datetime.datetime):
         return repr(obj.isoformat())
     else:
-        if PY2 and isinstance(obj, unicode): #Strings are always UTF8 in Py3
-            obj = obj.encode('utf8')
-
+        # if isinstance(obj, str):
+        #     obj = obj.encode('utf8')
         return repr(obj)
 
 def sqllist(lst): 
@@ -365,8 +334,10 @@ def sqllist(lst):
         'a, b'
         >>> sqllist('a')
         'a'
+        >>> sqllist(u'abc')
+        'abc'
     """
-    if isinstance(lst, string_types):
+    if isinstance(lst, str): 
         return lst
     else:
         return ', '.join(lst)
@@ -403,19 +374,18 @@ def sqlors(left, lst):
     else:
         return left + sqlparam(lst)
         
-def sqlwhere(data, grouping=' AND '):
+def sqlwhere(dictionary, grouping=' AND '): 
     """
-    Converts a two-tuple (key, value) iterable `data` to an SQL WHERE clause `SQLQuery`.
+    Converts a `dictionary` to an SQL WHERE clause `SQLQuery`.
     
-        >>> sqlwhere((('cust_id', 2), ('order_id',3)))
+        >>> sqlwhere({'cust_id': 2, 'order_id':3})
         <sql: 'cust_id = 2 AND order_id = 3'>
-        >>> sqlwhere((('order_id', 3), ('cust_id', 2)), grouping=', ')
-        <sql: 'order_id = 3, cust_id = 2'>
-        >>> sqlwhere((('a', 'a'), ('b', 'b'))).query()
+        >>> sqlwhere({'cust_id': 2, 'order_id':3}, grouping=', ')
+        <sql: 'cust_id = 2, order_id = 3'>
+        >>> sqlwhere({'a': 'a', 'b': 'b'}).query()
         'a = %s AND b = %s'
     """
-
-    return SQLQuery.join([k + ' = ' + sqlparam(v) for k, v in data], grouping)
+    return SQLQuery.join([k + ' = ' + sqlparam(v) for k, v in dictionary], grouping)
 
 def sqlquote(a): 
     """
@@ -632,28 +602,16 @@ class DB:
         return query, params
     
     def _where(self, where, vars): 
-        if isinstance(where, numeric_types):
+        if isinstance(where, int):
             where = "id = " + sqlparam(where)
         #@@@ for backward-compatibility
         elif isinstance(where, (list, tuple)) and len(where) == 2:
             where = SQLQuery(where[0], where[1])
-        elif isinstance(where, dict):
-            where = self._where_dict(where)
         elif isinstance(where, SQLQuery):
             pass
         else:
             where = reparam(where, vars)        
         return where
-
-    def _where_dict(self, where):
-        where_clauses = []
-        
-        for k, v in sorted(iteritems(where), key= lambda t:t[0]):
-            where_clauses.append(k + ' = ' + sqlquote(v))
-        if where_clauses:
-            return SQLQuery.join(where_clauses, " AND ")
-        else:
-            return None
     
     def query(self, sql_query, vars=None, processed=False, _test=False): 
         """
@@ -709,8 +667,6 @@ class DB:
             <sql: 'SELECT * FROM foo'>
             >>> db.select(['foo', 'bar'], where="foo.bar_id = bar.id", limit=5, _test=True)
             <sql: 'SELECT * FROM foo, bar WHERE foo.bar_id = bar.id LIMIT 5'>
-            >>> db.select('foo', where={'id': 5}, _test=True)
-            <sql: 'SELECT * FROM foo WHERE id = 5'>
         """
         if vars is None: vars = {}
         sql_clauses = self.sql_clauses(what, tables, where, group, order, limit, offset)
@@ -728,11 +684,19 @@ class DB:
             >>> db.where('foo', bar_id=3, _test=True)
             <sql: 'SELECT * FROM foo WHERE bar_id = 3'>
             >>> db.where('foo', source=2, crust='dewey', _test=True)
-            <sql: "SELECT * FROM foo WHERE crust = 'dewey' AND source = 2">
+            <sql: "SELECT * FROM foo WHERE source = 2 AND crust = 'dewey'">
             >>> db.where('foo', _test=True)
             <sql: 'SELECT * FROM foo'>
         """
-        where = self._where_dict(kwargs)            
+        where_clauses = []
+        for k, v in kwargs.items():
+            where_clauses.append(k + ' = ' + sqlquote(v))
+            
+        if where_clauses:
+            where = SQLQuery.join(where_clauses, " AND ")
+        else:
+            where = None
+            
         return self.select(table, what=what, order=order, 
                group=group, limit=limit, offset=offset, _test=_test, 
                where=where)
@@ -744,14 +708,11 @@ class DB:
             ('WHERE', where),
             ('GROUP BY', group),
             ('ORDER BY', order),
-            # The limit and offset could be the values provided by
-            # the end-user and are potentially unsafe.
-            # Using them as parameters to avoid any risk.
-            ('LIMIT', limit and SQLParam(limit).sqlquery()),
-            ('OFFSET', offset and SQLParam(offset).sqlquery()))
+            ('LIMIT', limit),
+            ('OFFSET', offset))
     
     def gen_clause(self, sql, val, vars): 
-        if isinstance(val, numeric_types):
+        if isinstance(val, int):
             if sql == 'WHERE':
                 nout = 'id = ' + sqlquote(val)
             else:
@@ -759,8 +720,6 @@ class DB:
         #@@@
         elif isinstance(val, (list, tuple)) and len(val) == 2:
             nout = SQLQuery(val[0], val[1]) # backwards-compatibility
-        elif sql == 'WHERE' and isinstance(val, dict):
-            nout = self._where_dict(val)
         elif isinstance(val, SQLQuery):
             nout = val
         else:
@@ -781,20 +740,17 @@ class DB:
             >>> db = DB(None, {})
             >>> q = db.insert('foo', name='bob', age=2, created=SQLLiteral('NOW()'), _test=True)
             >>> q
-            <sql: "INSERT INTO foo (age, created, name) VALUES (2, NOW(), 'bob')">
+            <sql: "INSERT INTO foo (name, age, created) VALUES ('bob', 2, NOW())">
             >>> q.query()
-            'INSERT INTO foo (age, created, name) VALUES (%s, NOW(), %s)'
+            'INSERT INTO foo (name, age, created) VALUES (%s, %s, NOW())'
             >>> q.values()
-            [2, 'bob']
+            ['bob', 2]
         """
         def q(x): return "(" + x + ")"
         
         if values:
-            #needed for Py3 compatibility with the above doctests
-            sorted_values = sorted(values.items(), key=lambda t: t[0]) 
-
-            _keys = SQLQuery.join(map(lambda t: t[0], sorted_values), ', ')
-            _values = SQLQuery.join([sqlparam(v) for v in map(lambda t: t[1], sorted_values)], ', ')
+            _keys = SQLQuery.join(values.keys(), ', ')
+            _values = SQLQuery.join([sqlparam(v) for v in values.values()], ', ')
             sql_query = "INSERT INTO %s " % tablename + q(_keys) + ' VALUES ' + q(_values)
         else:
             sql_query = SQLQuery(self._get_insert_default_values_query(tablename))
@@ -804,7 +760,6 @@ class DB:
         db_cursor = self._db_cursor()
         if seqname is not False: 
             sql_query = self._process_insert_query(sql_query, tablename, seqname)
-
 
         if isinstance(sql_query, tuple):
             # for some databases, a separate query has to be made to find 
@@ -819,11 +774,9 @@ class DB:
             out = db_cursor.fetchone()[0]
         except Exception: 
             out = None
-       
-
+        
         if not self.ctx.transactions: 
             self.ctx.commit()
-
         return out
         
     def _get_insert_default_values_query(self, table):
@@ -841,7 +794,7 @@ class DB:
             >>> db.supports_multiple_insert = True
             >>> values = [{"name": "foo", "email": "foo@example.com"}, {"name": "bar", "email": "bar@example.com"}]
             >>> db.multiple_insert('person', values=values, _test=True)
-            <sql: "INSERT INTO person (email, name) VALUES ('foo@example.com', 'foo'), ('bar@example.com', 'bar')">
+            <sql: "INSERT INTO person (name, email) VALUES ('foo', 'foo@example.com'), ('bar', 'bar@example.com')">
         """        
         if not values:
             return []
@@ -859,8 +812,6 @@ class DB:
         for v in values:
             if v.keys() != keys:
                 raise ValueError('Not all rows have the same keys')
-
-        keys = sorted(keys) #enforce query order for the above doctest compatibility with Py3
 
         sql_query = SQLQuery('INSERT INTO %s (%s) VALUES ' % (tablename, ', '.join(keys)))
 
@@ -905,16 +856,15 @@ class DB:
             >>> q = db.update('foo', where='name = $name', name='bob', age=2,
             ...     created=SQLLiteral('NOW()'), vars=locals(), _test=True)
             >>> q
-            <sql: "UPDATE foo SET age = 2, created = NOW(), name = 'bob' WHERE name = 'Joseph'">
+            <sql: "UPDATE foo SET name = 'bob', age = 2, created = NOW() WHERE name = 'Joseph'">
             >>> q.query()
-            'UPDATE foo SET age = %s, created = NOW(), name = %s WHERE name = %s'
+            'UPDATE foo SET name = %s, age = %s, created = NOW() WHERE name = %s'
             >>> q.values()
-            [2, 'bob', 'Joseph']
+            ['bob', 2, 'Joseph']
         """
         if vars is None: vars = {}
         where = self._where(where, vars)
-
-        values = sorted(values.items(), key=lambda t: t[0]) 
+        values = sorted(values.items(), key=lambda t: t[0])
 
         query = (
           "UPDATE " + sqllist(tables) + 
@@ -1018,21 +968,13 @@ class PostgresDB(DB):
 
 class MySQLDB(DB): 
     def __init__(self, **keywords):
-
-        db = import_driver(["MySQLdb", "pymysql","mysql.connector"], preferred=keywords.pop('driver', None))
-        if db.__name__ == "MySQLdb":
-            if 'pw' in keywords:
-                keywords['passwd'] = keywords['pw']
-                del keywords['pw']
-        if db.__name__ == "pymysql":
-            if 'pw' in keywords:
-                keywords['password'] = keywords['pw']
-                del keywords['pw']
-        if db.__name__ == "mysql.connector":
-            if 'pw' in keywords:
-                keywords['password'] = keywords['pw']
-                del keywords['pw']
-        
+        # MySQLdb doesn't support Python3 yet. Use pymysql to manipulate.
+        import pymysql
+        pymysql.install_as_MySQLdb()
+        import MySQLdb as db
+        if 'pw' in keywords:
+            keywords['passwd'] = keywords['pw']
+            del keywords['pw']
 
         if 'charset' not in keywords:
             keywords['charset'] = 'utf8'
@@ -1193,25 +1135,26 @@ def dburl2dict(url):
     """
     Takes a URL to a database and parses it into an equivalent dictionary.
     
-        >>> dburl2dict('postgres:///mygreatdb') == {'pw': None, 'dbn': 'postgres', 'db': 'mygreatdb', 'host': None, 'user': None, 'port': None}
+        >>> d = dburl2dict('postgres://james:day@serverfarm.example.net:5432/mygreatdb')
+        >>> d == {'pw': 'day', 'dbn': 'postgres', 'db': 'mygreatdb', 'host': 'serverfarm.example.net', 'user': 'james', 'port': 5432}
         True
-        >>> dburl2dict('postgres://james:day@serverfarm.example.net:5432/mygreatdb') == {'pw': 'day', 'dbn': 'postgres', 'db': 'mygreatdb', 'host': 'serverfarm.example.net', 'user': 'james', 'port': 5432}
+        >>> d = dburl2dict('postgres://james:day@serverfarm.example.net/mygreatdb')
+        >>> d == {'user': 'james', 'host': 'serverfarm.example.net', 'db': 'mygreatdb', 'pw': 'day', 'dbn': 'postgres'}
         True
-        >>> dburl2dict('postgres://james:day@serverfarm.example.net/mygreatdb') == {'pw': 'day', 'dbn': 'postgres', 'db': 'mygreatdb', 'host': 'serverfarm.example.net', 'user': 'james', 'port': None}
-        True
-        >>> dburl2dict('postgres://james:d%40y@serverfarm.example.net/mygreatdb') == {'pw': 'd@y', 'dbn': 'postgres', 'db': 'mygreatdb', 'host': 'serverfarm.example.net', 'user': 'james', 'port': None}
-        True
-        >>> dburl2dict('mysql://james:d%40y@serverfarm.example.net/mygreatdb') == {'pw': 'd@y', 'dbn': 'mysql', 'db': 'mygreatdb', 'host': 'serverfarm.example.net', 'user': 'james', 'port': None}
+        >>> d = dburl2dict('postgres://james:d%40y@serverfarm.example.net/mygreatdb')
+        >>> d == {'user': 'james', 'host': 'serverfarm.example.net', 'db': 'mygreatdb', 'pw': 'd@y', 'dbn': 'postgres'}
         True
     """
-    parts = urlparse.urlparse(unquote(url))
+    parts = urllib.parse.urlparse(urllib.request.unquote(url))
 
-    return {'dbn': parts.scheme,
+    d = {'dbn': parts.scheme,
             'user': parts.username,
             'pw': parts.password,
             'db': parts.path[1:],
-            'host': parts.hostname,
-            'port': parts.port}
+            'host': parts.hostname}
+    if parts.port:
+        d['port'] = parts.port
+    return d
 
 _databases = {}
 def database(dburl=None, **params):
@@ -1258,6 +1201,10 @@ def _interpolate(format):
 
     from <http://lfw.org/python/Itpl.py> (public domain, Ka-Ping Yee)
     """
+    import re
+    from tokenize import Token
+    tokenprog = re.compile(Token)
+
     def matchorfail(text, pos):
         match = tokenprog.match(text, pos)
         if match is None:
@@ -1265,7 +1212,7 @@ def _interpolate(format):
         return match, match.end()
 
     namechars = "abcdefghijklmnopqrstuvwxyz" \
-        "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_";
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_"
     chunks = []
     pos = 0
 
@@ -1316,175 +1263,6 @@ def _interpolate(format):
         chunks.append((0, format[pos:]))
     return chunks
 
-class _Node(object):
-    def __init__(self, type, first, second=None):
-        self.type = type
-        self.first = first
-        self.second = second
-
-    def __eq__(self, other):
-        return (isinstance(other, _Node)
-            and self.type == other.type
-            and self.first == other.first
-            and self.second == other.second)
-
-    def __repr__(self):
-        return "Node(%r, %r, %r)" % (self.type, self.first, self.second)
-
-class Parser:
-    """Parser to parse string templates like "Hello $name".
-
-    Loosely based on <http://lfw.org/python/Itpl.py> (public domain, Ka-Ping Yee)
-    """
-    namechars = "abcdefghijklmnopqrstuvwxyz" \
-            "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_"
-
-    def __init__(self):
-        self.reset()
-
-    def reset(self):
-        self.pos = 0
-        self.level = 0
-        self.text = ""
-
-    def parse(self, text):
-        """Parses the given text and returns a parse tree.
-        """
-        self.reset()
-        self.text = text
-        return self.parse_all()
-
-    def parse_all(self):
-        while True:
-            dollar = self.text.find("$", self.pos)
-            if dollar < 0:
-                break
-            nextchar = self.text[dollar + 1]
-            if nextchar in self.namechars:
-                yield _Node("text", self.text[self.pos:dollar])
-                self.pos = dollar+1
-                yield self.parse_expr()
-
-            # for supporting ${x.id}, for backward compataility
-            elif nextchar == '{':
-                saved_pos = self.pos
-                self.pos = dollar+2 # skip "${"
-                expr = self.parse_expr()
-                if self.text[self.pos] == '}':
-                    self.pos += 1
-                    yield _Node("text", self.text[self.pos:dollar])
-                    yield expr
-                else:
-                    self.pos = saved_pos
-                    break
-            else:
-                yield _Node("text", self.text[self.pos:dollar+1])
-                self.pos = dollar + 1
-                # $$ is used to escape $
-                if nextchar == "$":
-                    self.pos += 1
-
-        if self.pos < len(self.text):
-            yield _Node("text", self.text[self.pos:])
-
-    def match(self):
-        match = tokenprog.match(self.text, self.pos)
-        if match is None:
-            raise _ItplError(self.text, self.pos)
-        return match, match.end()
-
-    def is_literal(self, text):
-        return text and text[0] in "0123456789\"'"
-
-    def parse_expr(self):
-        match, pos = self.match()
-        if self.is_literal(match.group()):
-            expr = _Node("literal", match.group())
-        else:
-            expr = _Node("param", self.text[self.pos:pos])
-        self.pos = pos
-        while self.pos < len(self.text):
-            if self.text[self.pos] == "." and \
-                self.pos + 1 < len(self.text) and self.text[self.pos + 1] in self.namechars:
-                self.pos += 1
-                match, pos = self.match()
-                attr = match.group()
-                expr = _Node("getattr", expr, attr)
-                self.pos = pos
-            elif self.text[self.pos] == "[":
-                saved_pos = self.pos
-                self.pos += 1
-                key = self.parse_expr()
-                if self.text[self.pos] == ']':
-                    self.pos += 1
-                    expr = _Node("getitem", expr, key)
-                else:
-                    self.pos = saved_pos
-                    break
-            else:
-                break
-        return expr
-
-class SafeEval(object):
-    """Safe evaluator for binding params to db queries.
-    """
-    def safeeval(self, text, mapping):
-        nodes = Parser().parse(text)
-        return SQLQuery.join([self.eval_node(node, mapping) for node in nodes], "")
-
-    def eval_node(self, node, mapping):
-        if node.type == "text":
-            return node.first
-        else:
-            return sqlquote(self.eval_expr(node, mapping))
-
-    def eval_expr(self, node, mapping):
-        if node.type == "literal":
-            return ast.literal_eval(node.first)
-        elif node.type == "getattr":
-            return getattr(self.eval_expr(node.first, mapping), node.second)
-        elif node.type == "getitem":
-            return self.eval_expr(node.first, mapping)[self.eval_expr(node.second, mapping)]
-        elif node.type == "param":
-            return mapping[node.first]
-
-def test_parser():
-    def f(text, expected):
-        p = Parser()
-        nodes = list(p.parse(text))
-        print(repr(text), nodes)
-        assert nodes == expected, "Expected %r" % expected
-
-    f("Hello", [_Node("text", "Hello")])
-    f("Hello $name", [_Node("text", "Hello "), _Node("param", "name")])
-    f("Hello $name.foo", [
-        _Node("text", "Hello "),
-        _Node("getattr",
-            _Node("param", "name"),
-            "foo")])
-    f("WHERE id=$self.id LIMIT 1", [
-        _Node("text", "WHERE id="),
-        _Node('getattr',
-            _Node('param', 'self', None),
-            'id'),
-        _Node("text", " LIMIT 1")])
-
-    f("WHERE id=$self['id'] LIMIT 1", [
-        _Node("text", "WHERE id="),
-        _Node('getitem',
-            _Node('param', 'self', None),
-            _Node('literal', "'id'")),
-        _Node("text", " LIMIT 1")])
-
-def test_safeeval():
-    def f(q, vars):
-        return SafeEval().safeeval(q, vars)
-
-    print(f("WHERE id=$id", {"id": 1}).items)
-    assert f("WHERE id=$id", {"id": 1}).items == ["WHERE id=", sqlparam(1)]
-
 if __name__ == "__main__":
     import doctest
     doctest.testmod()
-    test_parser()
-    test_safeeval()
