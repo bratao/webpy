@@ -5,44 +5,43 @@ Web application
 from __future__ import print_function
 
 from . import webapi as web
-from . import webapi, wsgi, utils, browser
+from . import wsgi, utils, browser
 from .debugerror import debugerror
 from . import httpserver
-from .utils import lstrips, safeunicode
-from .py3helpers import iteritems, string_types, is_iter, PY2, text_type
+from .utils import lstrips
+from .py3helpers import iteritems, string_types, is_iter, PY2
 import sys
 
-import urllib
 import traceback
 import itertools
 import os
-import types
 from inspect import isclass
 
 import wsgiref.handlers
 
-try:
-    from urllib.parse import splitquery, urlencode, quote, unquote
-except ImportError:
-    from urllib import splitquery, urlencode, quote, unquote
+if PY2:
+    from urllib import splitquery, urlencode, unquote
+else:
+    from urllib.parse import urlparse, urlencode, unquote
 
 try:
-    from importlib import reload #Since Py 3.4 reload is in importlib
-except ImportError:
-    try:
-        from imp import reload #Since Py 3.0 and before 3.4 reload is in imp
-    except ImportError:
-        pass #Before Py 3.0 reload is a global function
+    reload  # Python 2
+except NameError:
+    from importlib import reload  # Python 3
 
 from io import BytesIO
 
 
 __all__ = [
-    "application", "auto_application",
-    "subdir_application", "subdomain_application",
-    "loadhook", "unloadhook",
-    "autodelegate"
+    "application",
+    "auto_application",
+    "subdir_application",
+    "subdomain_application",
+    "loadhook",
+    "unloadhook",
+    "autodelegate",
 ]
+
 
 class application:
     """
@@ -54,11 +53,14 @@ class application:
         ...     def GET(self): return "hello"
         >>>
         >>> app.request("/hello").data
-        b'hello'
+        'hello'
     """
+
+    # PY3DOCTEST: b'hello'
+
     def __init__(self, mapping=(), fvars={}, autoreload=None):
         if autoreload is None:
-            autoreload = web.config.get('debug', False)
+            autoreload = web.config.get("debug", False)
         self.init_mapping(mapping)
         self.fvars = fvars
         self.processors = []
@@ -67,18 +69,21 @@ class application:
         self.add_processor(unloadhook(self._unload))
 
         if autoreload:
+
             def main_module_name():
-                mod = sys.modules['__main__']
-                file = getattr(mod, '__file__', None) # make sure this works even from python interpreter
+                mod = sys.modules["__main__"]
+                file = getattr(
+                    mod, "__file__", None
+                )  # make sure this works even from python interpreter
                 return file and os.path.splitext(os.path.basename(file))[0]
 
             def modname(fvars):
                 """find name of the module name from fvars."""
-                file, name = fvars.get('__file__'), fvars.get('__name__')
+                file, name = fvars.get("__file__"), fvars.get("__name__")
                 if file is None or name is None:
                     return None
 
-                if name == '__main__':
+                if name == "__main__":
                     # Since the __main__ module can't be reloaded, the module has
                     # to be imported using its file name.
                     name = main_module_name()
@@ -89,7 +94,7 @@ class application:
 
             def reload_mapping():
                 """loadhook to reload mapping and fvars."""
-                mod = __import__(module_name, None, None, [''])
+                mod = __import__(module_name, None, None, [""])
                 mapping = getattr(mod, mapping_name, None)
                 if mapping:
                     self.fvars = mod.__dict__
@@ -97,10 +102,15 @@ class application:
 
             self.add_processor(loadhook(Reloader()))
             if mapping_name and module_name:
+                # when app is ran as part of a package, this puts the app into
+                # `sys.modules` correctly, otherwise the first change to the
+                # app module will not be picked up by Reloader
+                reload_mapping()
+
                 self.add_processor(loadhook(reload_mapping))
 
             # load __main__ module usings its filename, so that it can be reloaded.
-            if main_module_name() and '__main__' in sys.argv:
+            if main_module_name() and "__main__" in sys.argv:
                 try:
                     __import__(main_module_name())
                 except ImportError:
@@ -114,7 +124,7 @@ class application:
 
         if web.ctx.app_stack:
             # this is a sub-application, revert ctx to earlier state.
-            oldctx = web.ctx.get('_oldctx')
+            oldctx = web.ctx.get("_oldctx")
             if oldctx:
                 web.ctx.home = oldctx.home
                 web.ctx.homepath = oldctx.homepath
@@ -146,12 +156,21 @@ class application:
             ...
             >>> app.add_processor(hello)
             >>> app.request("/web.py").data
-            b'hello, web.py'
+            'hello, web.py'
         """
+        # PY3DOCTEST: b'hello, web.py'
         self.processors.append(processor)
 
-    def request(self, localpart='/', method='GET', data=None,
-                host="0.0.0.0:8080", headers=None, https=False, **kw):
+    def request(
+        self,
+        localpart="/",
+        method="GET",
+        data=None,
+        host="0.0.0.0:8080",
+        headers=None,
+        https=False,
+        **kw
+    ):
         """Makes request to this application for the specified path and method.
         Response will be a storage object with data, status and headers.
 
@@ -164,7 +183,7 @@ class application:
             ...
             >>> response = app.request("/hello")
             >>> response.data
-            b'hello'
+            'hello'
             >>> response.status
             '200 OK'
             >>> response.headers['Content-Type']
@@ -196,41 +215,57 @@ class application:
             >>> app.request('/ua', headers = {
             ...      'User-Agent': 'a small jumping bean/1.0 (compatible)'
             ... }).data
-            b'your user-agent is a small jumping bean/1.0 (compatible)'
+            'your user-agent is a small jumping bean/1.0 (compatible)'
 
         """
-        path, maybe_query = splitquery(localpart)
+        # PY3DOCTEST: b'hello'
+        # PY3DOCTEST: b'your user-agent is a small jumping bean/1.0 (compatible)'
+        if PY2:
+            path, maybe_query = splitquery(localpart)
+        else:
+            _p = urlparse(localpart)
+            path = _p.path
+            maybe_query = _p.query
+
         query = maybe_query or ""
 
-        if 'env' in kw:
-            env = kw['env']
+        if "env" in kw:
+            env = kw["env"]
         else:
             env = {}
-        env = dict(env, HTTP_HOST=host, REQUEST_METHOD=method, PATH_INFO=path, QUERY_STRING=query, HTTPS=str(https))
+        env = dict(
+            env,
+            HTTP_HOST=host,
+            REQUEST_METHOD=method,
+            PATH_INFO=path,
+            QUERY_STRING=query,
+            HTTPS=str(https),
+        )
         headers = headers or {}
 
         for k, v in headers.items():
-            env['HTTP_' + k.upper().replace('-', '_')] = v
+            env["HTTP_" + k.upper().replace("-", "_")] = v
 
-        if 'HTTP_CONTENT_LENGTH' in env:
-            env['CONTENT_LENGTH'] = env.pop('HTTP_CONTENT_LENGTH')
+        if "HTTP_CONTENT_LENGTH" in env:
+            env["CONTENT_LENGTH"] = env.pop("HTTP_CONTENT_LENGTH")
 
-        if 'HTTP_CONTENT_TYPE' in env:
-            env['CONTENT_TYPE'] = env.pop('HTTP_CONTENT_TYPE')
+        if "HTTP_CONTENT_TYPE" in env:
+            env["CONTENT_TYPE"] = env.pop("HTTP_CONTENT_TYPE")
 
         if method not in ["HEAD", "GET"]:
-            data = data or ''
+            data = data or ""
 
             if isinstance(data, dict):
                 q = urlencode(data)
             else:
                 q = data
 
-            env['wsgi.input'] = BytesIO(q.encode('utf-8'))
-            if 'CONTENT_LENGTH' not in env:
-            #if not env.get('CONTENT_TYPE', '').lower().startswith('multipart/') and 'CONTENT_LENGTH' not in env:
-                env['CONTENT_LENGTH'] = len(q)
+            env["wsgi.input"] = BytesIO(q.encode("utf-8"))
+            # if not env.get('CONTENT_TYPE', '').lower().startswith('multipart/') and 'CONTENT_LENGTH' not in env:
+            if "CONTENT_LENGTH" not in env:
+                env["CONTENT_LENGTH"] = len(q)
         response = web.storage()
+
         def start_response(status, headers):
             response.status = status
             response.headers = dict(headers)
@@ -268,6 +303,7 @@ class application:
 
     def wsgifunc(self, *middleware):
         """Returns a WSGI-compatible function for this application."""
+
         def peep(iterator):
             """Peeps into an iterator by doing an iteration
             and returns an equivalent iterator.
@@ -278,7 +314,7 @@ class application:
             try:
                 firstchunk = next(iterator)
             except StopIteration:
-                firstchunk = ''
+                firstchunk = ""
 
             return itertools.chain([firstchunk], iterator)
 
@@ -308,9 +344,9 @@ class application:
                         if isinstance(r, bytes):
                             yield r
                         elif isinstance(r, string_types):
-                            yield r.encode('utf-8')
+                            yield r.encode("utf-8")
                         else:
-                            yield str(r).encode('utf-8')
+                            yield str(r).encode("utf-8")
 
             result = build_result(result)
 
@@ -319,7 +355,7 @@ class application:
 
             def cleanup():
                 self._cleanup()
-                yield b'' # force this function to be a generator
+                yield b""  # force this function to be a generator
 
             return itertools.chain(result, cleanup())
 
@@ -358,6 +394,7 @@ class application:
 
         try:
             from google.appengine.ext.webapp.util import run_wsgi_app
+
             return run_wsgi_app(wsgiapp)
         except ImportError:
             # we're not running from within Google App Engine
@@ -387,11 +424,13 @@ class application:
         try:
             # check what version of python is running
             version = sys.version_info[:2]
-            major   = version[0]
-            minor   = version[1]
+            major = version[0]
+            minor = version[1]
 
             if major != 2:
-                raise EnvironmentError("Google App Engine only supports python 2.5 and 2.7")
+                raise EnvironmentError(
+                    "Google App Engine only supports python 2.5 and 2.7"
+                )
 
             # if 2.7, return a function that can be run by gae
             if minor == 7:
@@ -399,9 +438,12 @@ class application:
             # if 2.5, use run_wsgi_app
             elif minor == 5:
                 from google.appengine.ext.webapp.util import run_wsgi_app
+
                 return run_wsgi_app(wsgiapp)
             else:
-                raise EnvironmentError("Not a supported platform, use python 2.5 or 2.7")
+                raise EnvironmentError(
+                    "Not a supported platform, use python 2.5 or 2.7"
+                )
         except ImportError:
             return wsgiref.handlers.CGIHandler().run(wsgiapp)
 
@@ -409,38 +451,41 @@ class application:
         """Initializes ctx using env."""
         ctx = web.ctx
         ctx.clear()
-        ctx.status = '200 OK'
+        ctx.status = "200 OK"
         ctx.headers = []
-        ctx.output = ''
+        ctx.output = ""
         ctx.environ = ctx.env = env
-        ctx.host = env.get('HTTP_HOST')
+        ctx.host = env.get("HTTP_HOST")
 
-        if env.get('wsgi.url_scheme') in ['http', 'https']:
-            ctx.protocol = env['wsgi.url_scheme']
-        elif env.get('HTTPS', '').lower() in ['on', 'true', '1']:
-            ctx.protocol = 'https'
+        if env.get("wsgi.url_scheme") in ["http", "https"]:
+            ctx.protocol = env["wsgi.url_scheme"]
+        elif env.get("HTTPS", "").lower() in ["on", "true", "1"]:
+            ctx.protocol = "https"
         else:
-            ctx.protocol = 'http'
-        ctx.homedomain = ctx.protocol + '://' + env.get('HTTP_HOST', '[unknown]')
-        ctx.homepath = os.environ.get('REAL_SCRIPT_NAME', env.get('SCRIPT_NAME', ''))
+            ctx.protocol = "http"
+        ctx.homedomain = ctx.protocol + "://" + env.get("HTTP_HOST", "[unknown]")
+        ctx.homepath = os.environ.get("REAL_SCRIPT_NAME", env.get("SCRIPT_NAME", ""))
         ctx.home = ctx.homedomain + ctx.homepath
-        #@@ home is changed when the request is handled to a sub-application.
-        #@@ but the real home is required for doing absolute redirects.
+        # @@ home is changed when the request is handled to a sub-application.
+        # @@ but the real home is required for doing absolute redirects.
         ctx.realhome = ctx.home
-        ctx.ip = env.get('REMOTE_ADDR')
-        ctx.method = env.get('REQUEST_METHOD')
-        ctx.path = env.get('PATH_INFO')
+        ctx.ip = env.get("REMOTE_ADDR")
+        ctx.method = env.get("REQUEST_METHOD")
+        if PY2:
+            ctx.path = env.get("PATH_INFO")
+        else:
+            ctx.path = env.get("PATH_INFO").encode("latin1").decode("utf8")
         # http://trac.lighttpd.net/trac/ticket/406 requires:
-        if env.get('SERVER_SOFTWARE', '').startswith('lighttpd/'):
-            ctx.path = lstrips(env.get('REQUEST_URI').split('?')[0], ctx.homepath)
+        if env.get("SERVER_SOFTWARE", "").startswith("lighttpd/"):
+            ctx.path = lstrips(env.get("REQUEST_URI").split("?")[0], ctx.homepath)
             # Apache and CherryPy webservers unquote the url but lighttpd doesn't.
             # unquote explicitly for lighttpd to make ctx.path uniform across all servers.
             ctx.path = unquote(ctx.path)
 
-        if env.get('QUERY_STRING'):
-            ctx.query = '?' + env.get('QUERY_STRING', '')
+        if env.get("QUERY_STRING"):
+            ctx.query = "?" + env.get("QUERY_STRING", "")
         else:
-            ctx.query = ''
+            ctx.query = ""
 
         ctx.fullpath = ctx.path + ctx.query
 
@@ -448,18 +493,18 @@ class application:
             # convert all string values to unicode values and replace
             # malformed data with a suitable replacement marker.
             if isinstance(v, bytes):
-                ctx[k] = v.decode('utf-8', 'replace')
+                ctx[k] = v.decode("utf-8", "replace")
 
         # status must always be str
-        ctx.status = '200 OK'
+        ctx.status = "200 OK"
 
         ctx.app_stack = []
 
     def _delegate(self, f, fvars, args=[]):
         def handle_class(cls):
             meth = web.ctx.method
-            if meth == 'HEAD' and not hasattr(cls, meth):
-                meth = 'GET'
+            if meth == "HEAD" and not hasattr(cls, meth):
+                meth = "GET"
             if not hasattr(cls, meth):
                 raise web.nomethod(cls)
             tocall = getattr(cls(), meth)
@@ -472,21 +517,21 @@ class application:
         elif isclass(f):
             return handle_class(f)
         elif isinstance(f, string_types):
-            if f.startswith('redirect '):
-                url = f.split(' ', 1)[1]
+            if f.startswith("redirect "):
+                url = f.split(" ", 1)[1]
                 if web.ctx.method == "GET":
-                    x = web.ctx.env.get('QUERY_STRING', '')
+                    x = web.ctx.env.get("QUERY_STRING", "")
                     if x:
-                        url += '?' + x
+                        url += "?" + x
                 raise web.redirect(url)
-            elif '.' in f:
-                mod, cls = f.rsplit('.', 1)
-                mod = __import__(mod, None, None, [''])
+            elif "." in f:
+                mod, cls = f.rsplit(".", 1)
+                mod = __import__(mod, None, None, [""])
                 cls = getattr(mod, cls)
             else:
                 cls = fvars[f]
             return handle_class(cls)
-        elif hasattr(f, '__call__'):
+        elif hasattr(f, "__call__"):
             return f()
         else:
             return web.notfound()
@@ -500,11 +545,11 @@ class application:
                 else:
                     continue
             elif isinstance(what, string_types):
-                what, result = utils.re_subm(r'^%s\Z' % (pat,), what, value)
+                what, result = utils.re_subm(r"^%s\Z" % (pat,), what, value)
             else:
-                result = utils.re_compile(r'^%s\Z' % (pat,)).match(value)
+                result = utils.re_compile(r"^%s\Z" % (pat,)).match(value)
 
-            if result: # it's a match
+            if result:  # it's a match
                 return what, [x for x in result.groups()]
         return None, None
 
@@ -518,15 +563,15 @@ class application:
         web.ctx._oldctx = web.storage(web.ctx)
         web.ctx.home += dir
         web.ctx.homepath += dir
-        web.ctx.path = web.ctx.path[len(dir):]
-        web.ctx.fullpath = web.ctx.fullpath[len(dir):]
+        web.ctx.path = web.ctx.path[len(dir) :]
+        web.ctx.fullpath = web.ctx.fullpath[len(dir) :]
         return app.handle_with_processors()
 
     def get_parent_app(self):
         if self in web.ctx.app_stack:
             index = web.ctx.app_stack.index(self)
             if index > 0:
-                return web.ctx.app_stack[index-1]
+                return web.ctx.app_stack[index - 1]
 
     def notfound(self):
         """Returns HTTPError with '404 not found' message"""
@@ -541,19 +586,22 @@ class application:
         parent = self.get_parent_app()
         if parent:
             return parent.internalerror()
-        elif web.config.get('debug'):
+        elif web.config.get("debug"):
             return debugerror()
         else:
             return web._InternalError()
+
 
 def with_metaclass(mcls):
     def decorator(cls):
         body = vars(cls).copy()
         # clean out class body
-        body.pop('__dict__', None)
-        body.pop('__weakref__', None)
+        body.pop("__dict__", None)
+        body.pop("__weakref__", None)
         return mcls(cls.__name__, cls.__bases__, body)
+
     return decorator
+
 
 class auto_application(application):
     """Application similar to `application` but urls are constructed
@@ -567,35 +615,40 @@ class auto_application(application):
         ...     path = '/foo/.*'
         ...     def GET(self): return "foo"
         >>> app.request("/hello").data
-        b'hello, world'
+        'hello, world'
         >>> app.request('/foo/bar').data
-        b'foo'
+        'foo'
     """
+
+    # PY3DOCTEST: b'hello, world'
+    # PY3DOCTEST: b'foo'
+
     def __init__(self):
         application.__init__(self)
 
         class metapage(type):
             def __init__(klass, name, bases, attrs):
                 type.__init__(klass, name, bases, attrs)
-                path = attrs.get('path', '/' + name)
+                path = attrs.get("path", "/" + name)
 
                 # path can be specified as None to ignore that class
                 # typically required to create a abstract base class.
                 if path is not None:
                     self.add_mapping(path, klass)
 
-
-        @with_metaclass(metapage) #little hack needed or Py2 and Py3 compatibility
-        class page():
+        @with_metaclass(metapage)  # little hack needed for Py2 and Py3 compatibility
+        class page:
             path = None
 
         self.page = page
 
+
 # The application class already has the required functionality of subdir_application
 subdir_application = application
 
+
 class subdomain_application(application):
-    """
+    r"""
     Application to delegate requests based on the host.
 
         >>> urls = ("/hello", "hello")
@@ -606,28 +659,33 @@ class subdomain_application(application):
         >>> mapping = (r"hello\.example\.com", app)
         >>> app2 = subdomain_application(mapping)
         >>> app2.request("/hello", host="hello.example.com").data
-        b'hello'
+        'hello'
         >>> response = app2.request("/hello", host="something.example.com")
         >>> response.status
         '404 Not Found'
         >>> response.data
-        b'not found'
+        'not found'
     """
+
+    # PY3DOCTEST: b'hello'
+    # PY3DOCTEST: b'not found'
+
     def handle(self):
-        host = web.ctx.host.split(':')[0] #strip port
+        host = web.ctx.host.split(":")[0]  # strip port
         fn, args = self._match(self.mapping, host)
         return self._delegate(fn, self.fvars, args)
 
     def _match(self, mapping, value):
         for pat, what in mapping:
             if isinstance(what, string_types):
-                what, result = utils.re_subm('^' + pat + '$', what, value)
+                what, result = utils.re_subm("^" + pat + "$", what, value)
             else:
-                result = utils.re_compile('^' + pat + '$').match(value)
+                result = utils.re_compile("^" + pat + "$").match(value)
 
-            if result: # it's a match
+            if result:  # it's a match
                 return what, [x for x in result.groups()]
         return None, None
+
 
 def loadhook(h):
     """
@@ -638,11 +696,13 @@ def loadhook(h):
         ...
         >>> app.add_processor(loadhook(f))
     """
+
     def processor(handler):
         h()
         return handler()
 
     return processor
+
 
 def unloadhook(h):
     """
@@ -653,6 +713,7 @@ def unloadhook(h):
         ...
         >>> app.add_processor(unloadhook(f))
     """
+
     def processor(handler):
         try:
             result = handler()
@@ -686,7 +747,8 @@ def unloadhook(h):
 
     return processor
 
-def autodelegate(prefix=''):
+
+def autodelegate(prefix=""):
     """
     Returns a method that takes one argument and calls the method named prefix+arg,
     calling `notfound()` if there isn't one. Example:
@@ -704,11 +766,12 @@ def autodelegate(prefix=''):
     If a user visits `/prefs/password/change` then `GET_password(self, '/change')`
     is called.
     """
+
     def internal(self, arg):
-        if '/' in arg:
-            first, rest = arg.split('/', 1)
+        if "/" in arg:
+            first, rest = arg.split("/", 1)
             func = prefix + first
-            args = ['/' + rest]
+            args = ["/" + rest]
         else:
             func = prefix + arg
             args = []
@@ -720,7 +783,9 @@ def autodelegate(prefix=''):
                 raise web.notfound()
         else:
             raise web.notfound()
+
     return internal
+
 
 class Reloader:
     """Checks to see if any loaded modules have changed on disk and,
@@ -728,29 +793,32 @@ class Reloader:
     """
 
     """File suffix of compiled modules."""
-    if sys.platform.startswith('java'):
-        SUFFIX = '$py.class'
+    if sys.platform.startswith("java"):
+        SUFFIX = "$py.class"
     else:
-        SUFFIX = '.pyc'
+        SUFFIX = ".pyc"
 
     def __init__(self):
         self.mtimes = {}
 
     def __call__(self):
-        for mod in sys.modules.values():
+        sys_modules = list(sys.modules.values())
+        for mod in sys_modules:
             self.check(mod)
 
     def check(self, mod):
         # jython registers java packages as modules but they either
         # don't have a __file__ attribute or its value is None
-        if not (mod and hasattr(mod, '__file__') and mod.__file__):
+        if not (mod and hasattr(mod, "__file__") and mod.__file__):
             return
 
         try:
             mtime = os.stat(mod.__file__).st_mtime
         except (OSError, IOError):
             return
-        if mod.__file__.endswith(self.__class__.SUFFIX) and os.path.exists(mod.__file__[:-1]):
+        if mod.__file__.endswith(self.__class__.SUFFIX) and os.path.exists(
+            mod.__file__[:-1]
+        ):
             mtime = max(os.stat(mod.__file__[:-1]).st_mtime, mtime)
 
         if mod not in self.mtimes:
@@ -762,6 +830,8 @@ class Reloader:
             except ImportError:
                 pass
 
+
 if __name__ == "__main__":
     import doctest
+
     doctest.testmod()

@@ -3,10 +3,10 @@
 
 from __future__ import generators
 
-__version__ = "0.40-dev1"
+__version__ = "0.40"
 __author__ = [
     "Aaron Swartz <me@aaronsw.com>",
-    "Anand Chitipothu <anandology@gmail.com>"
+    "Anand Chitipothu <anandology@gmail.com>",
 ]
 __license__ = "public domain"
 __contributors__ = "see http://webpy.org/changes"
@@ -25,9 +25,3 @@ from .webapi import *
 from .httpserver import *
 from .debugerror import *
 from .application import *
-#from browser import *
-try:
-    from . import webopenid as openid
-except ImportError:
-    pass # requires openid module
-
